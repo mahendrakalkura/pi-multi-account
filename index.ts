@@ -2581,6 +2581,16 @@ function ref(provider: string, modelId: string): ModelRef {
 	return `${provider}/${modelId}` as ModelRef;
 }
 
+/** Render model identity without exposing the internal account slot used for routing. */
+export function displayModelRef(provider: string, modelId: string): string {
+	return modelId;
+}
+
+function displayRef(modelRef: string): string {
+	const slash = modelRef.indexOf("/");
+	return slash === -1 ? modelRef : modelRef.slice(slash + 1);
+}
+
 function parseTarget(
 	target: unknown,
 ): { provider: string; modelId?: string } | undefined {
@@ -6779,8 +6789,8 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 		// picking up accounts that freed up, which is the opposite of what it does.
 		ctx.ui.notify(
 			spent
-				? `pi-multi-account: switched to ${model.provider}/${model.id} — its quota forecast still says spent (~${formatUntil(until)}), but a forecast is not a verdict: it is tried right now, and re-checked at least every ${formatDelay(config.maxRecheckIntervalMs)} regardless`
-				: `pi-multi-account: switched to ${model.provider}/${model.id}`,
+				? `pi-multi-account: switched to ${displayModelRef(model.provider, model.id)} — its quota forecast still says spent (~${formatUntil(until)}), but a forecast is not a verdict: it is tried right now, and re-checked at least every ${formatDelay(config.maxRecheckIntervalMs)} regardless`
+				: `pi-multi-account: switched to ${displayModelRef(model.provider, model.id)}`,
 			"info",
 		);
 	}
@@ -6850,7 +6860,7 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 			if (stale()) return false;
 			if (!ok) {
 				ctx.ui.notify(
-					`Provider failover: ${to} could not be activated; skipping it briefly`,
+					`Provider failover: ${displayRef(to)} could not be activated; skipping it briefly`,
 					"warning",
 				);
 				// A setModel failure is not a quota/rate-limit and must not receive the normal
@@ -6888,7 +6898,7 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 			const startupPreflight = reason.startsWith("startup preflight:");
 			if (!startupPreflight) {
 				ctx.ui.notify(
-					`Provider failover [v${VERSION}]: ${from} → ${to} (${reason})`,
+					`Provider failover [v${VERSION}]: ${displayRef(from)} → ${displayRef(to)} (${reason})`,
 					"warning",
 				);
 			}
@@ -7728,10 +7738,10 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 				: "the active account");
 		const sameModelRetry = source?.from === to;
 		const prompt = sameModelRetry
-			? `Provider retry activated: retrying ${to} after a temporary failure; no account or model switch occurred. Continue the interrupted task from where it stopped. The interrupted turn is preserved verbatim in this session as a [handoff:interrupted-turn] record — read it before acting and do not restart the task from the beginning.`
+			? `Provider retry activated: retrying ${displayRef(to)} after a temporary failure; no account or model switch occurred. Continue the interrupted task from where it stopped. The interrupted turn is preserved verbatim in this session as a [handoff:interrupted-turn] record — read it before acting and do not restart the task from the beginning.`
 			: config.continuationPrompt
-					.replaceAll("{from}", String(source?.from ?? "the previous account"))
-					.replaceAll("{to}", String(to))
+					.replaceAll("{from}", source?.from ? displayRef(source.from) : "the previous account")
+					.replaceAll("{to}", displayRef(to))
 					.replaceAll("{reason}", source?.reason ?? "provider failover");
 		try {
 			expectingInjectedContinuation = true;
@@ -9451,7 +9461,7 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 
 		refreshDiscovery(false, ctx);
 		const current = ctx.model
-			? `${ctx.model.provider}/${ctx.model.id}`
+			? displayModelRef(ctx.model.provider, ctx.model.id)
 			: "none";
 		// What the rotation looks like to anything that does NOT load this extension: a memory
 		// extension consolidating its notes, an external CLI, any `pi -p --no-extensions` child.
