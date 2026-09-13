@@ -93,6 +93,7 @@ const {
 	default: piMultiAccount,
 	explicitCliSelections,
 	canPersistRefreshedCredentials,
+	displayModelRef,
 	mergeRefreshedCredentials,
 	modelIdentityKey,
 	modelQualityBand,
@@ -108,6 +109,7 @@ const {
 		authStorage: any,
 		authWritable?: () => boolean,
 	) => boolean;
+	displayModelRef: (provider: string, modelId: string) => string;
 	mergeRefreshedCredentials: (credentials: any, refreshed: any) => any;
 	modelIdentityKey: (modelId: string) => string;
 	modelQualityBand: (modelId: string, provider?: string) => "apex" | "frontier" | "balanced" | "fast" | undefined;
@@ -175,6 +177,11 @@ test("explicit CLI selection detection follows Pi option parsing", () => {
 	);
 });
 
+test("display model identity hides the internal account-routing provider", () => {
+	assert.equal(displayModelRef("openai-codex-account-2", "gpt-5.6-sol"), "gpt-5.6-sol");
+	assert.equal(displayModelRef("anthropic", "claude-opus-5"), "claude-opus-5");
+});
+
 test("model identity folds Cursor effort suffixes and the cursor- prefix", () => {
 	assert.equal(modelIdentityKey("cursor-grok-4.6-high"), "grok-4.6");
 	assert.equal(modelIdentityKey("cursor-grok-4.6"), "grok-4.6");
@@ -185,6 +192,26 @@ test("model identity folds Cursor effort suffixes and the cursor- prefix", () =>
 	assert.ok(!sameModelIdentity("cursor-grok-4.6", "claude-4-sonnet"));
 	assert.ok(!sameModelIdentity("gpt-5.4", "gpt-5.4-mini"));
 	assert.ok(!sameModelIdentity("k3", "k3-256k"));
+});
+
+test("failover notifications and status hide account aliases from model identity", async () => {
+	const t = setup({
+		accounts: {
+			anthropic: { type: "oauth", access: "a", refresh: "ar" },
+			"openai-codex-account-2": { type: "oauth", access: "c", refresh: "cr" },
+		},
+		current: { provider: "anthropic", id: "claude-opus-4-8" },
+	});
+	await finishError(t, "anthropic", "claude-opus-4-8", "429 rate limit");
+	const failover = t.rec.notifies.find((message) => message.includes("Provider failover [v")) ?? "";
+	assert.match(failover, /claude-opus-4-8.*gpt-5\.5/);
+	assert.doesNotMatch(failover, /openai-codex-account-2/);
+
+	t.rec.notifies.length = 0;
+	await t.command("status");
+	const status = t.rec.notifies.at(-1) ?? "";
+	assert.match(status, /Current: gpt-5\.5/);
+	assert.doesNotMatch(status, /Current: openai-codex-account-2\//);
 });
 
 test("cross-provider quality bands quarantine Astra/Fable above ordinary frontier", () => {
@@ -3023,6 +3050,36 @@ test("Ollama alias slots (ollama-account-2) join the rotation", async () => {
 	);
 });
 
+test("showStartupNotice false suppresses only the startup notice", async () => {
+	const t = setup({
+		accounts: {
+			"openai-codex": {
+				type: "oauth",
+				access: codexAccessToken("shared-workspace", "membership-a", "base"),
+				refresh: "base-r",
+				accountId: "shared-workspace",
+			},
+			"openai-codex-account-2": {
+				type: "oauth",
+				access: codexAccessToken("shared-workspace", "membership-a", "refreshed"),
+				refresh: "duplicate-r",
+				accountId: "shared-workspace",
+			},
+		},
+		config: { showStartupNotice: false },
+		current: { provider: "openai-codex", id: "gpt-5.5" },
+	});
+	await t.fire("session_start", { reason: "startup" });
+	assert.equal(
+		t.rec.notifies.some((message) => message.includes("account(s) in rotation")),
+		false,
+	);
+	assert.equal(
+		t.rec.notifies.some((message) => message.includes("duplicate account slot(s) skipped")),
+		true,
+	);
+});
+
 test("Alibaba/Qwen alias slots (alibaba-account-2) join the rotation", async () => {
 	const accounts = {
 		alibaba: { type: "api_key", key: "k1" },
@@ -3085,6 +3142,40 @@ test("Kimi alias slots (kimi-coding-account-2) join the rotation", async () => {
 		switchedToKimi,
 		`a 429 on anthropic must fail over to a Kimi slot, got: ${t.rec.setModels.join(", ")}`,
 	);
+});
+
+test("initialization registers the next free Anthropic OAuth slot before /login snapshots providers", () => {
+	const t = setup({
+		accounts: {
+			anthropic: { type: "oauth", access: "a1", refresh: "ar1" },
+			"anthropic-account-2": { type: "oauth", access: "a2", refresh: "ar2" },
+			"anthropic-account-3": { type: "oauth", access: "a3", refresh: "ar3" },
+		},
+		current: { provider: "anthropic", id: "claude-opus-4-8" },
+	});
+
+	assert.deepEqual(
+		t.rec.registrations
+			.map(({ provider }) => provider)
+			.filter((provider) => provider.startsWith("anthropic-account-")),
+		["anthropic-account-2", "anthropic-account-3", "anthropic-account-4"],
+		"all occupied aliases and the next free slot must exist when initialization returns",
+	);
+	for (const provider of ["anthropic-account-2", "anthropic-account-3"]) {
+		const slot = t.providerConfigs.get(provider);
+		assert.equal(slot.oauth.isSubscription, true);
+		assert.equal(typeof slot.oauth.login, "function");
+		assert.equal(
+			slot.oauth.getApiKey({ type: "oauth", access: `${provider}-access`, refresh: "r" }),
+			`${provider}-access`,
+			`${provider} must retain its slot-bound credential behavior`,
+		);
+	}
+	const spare = t.providerConfigs.get("anthropic-account-4");
+	assert.equal(spare.oauth.isSubscription, true);
+	assert.equal(typeof spare.oauth.login, "function");
+
+	return t.fire("session_shutdown", { reason: "test" });
 });
 
 test("a Kimi subscription slot is registered so /login can offer it", async () => {
@@ -3763,6 +3854,78 @@ test("session_start restores settings.json default when lastUserModel is missing
 		`settings.json default must win over Pi's anthropic fallback; setModels=${t.rec.setModels.join(",")}`,
 	);
 	uninstallCursorProvider();
+});
+
+test("startup preflight switches silently and does not repeat on before_agent_start", async () => {
+	const now = Date.now();
+	const t = setup({
+		accounts: {
+			"openai-codex": {
+				type: "oauth",
+				access: "c1",
+				refresh: "cr1",
+				accountId: "codex-1",
+			},
+			"openai-codex-account-2": {
+				type: "oauth",
+				access: "c2",
+				refresh: "cr2",
+				accountId: "codex-2",
+			},
+			anthropic: { type: "oauth", access: "a", refresh: "ar" },
+		},
+		current: { provider: "openai-codex", id: "gpt-5.6-sol" },
+		seedState: {
+			stateVersion: 5,
+			exhaustedUntilByProvider: {
+				"openai-codex": now + 60 * 60 * 1000,
+			},
+			exhaustedUntilByModel: {},
+			lastProbeAtByProvider: {},
+			invalidatedByProvider: {},
+			lastSwitches: [],
+		},
+	});
+
+	await t.fire("session_start", { reason: "startup" });
+	assert.equal(t.ctx.model?.provider, "openai-codex-account-2");
+	assert.equal(
+		t.rec.notifies.filter((message) =>
+			message.includes("startup preflight: selected account unavailable"),
+		).length,
+		0,
+		"startup maintenance must not warn, even when session_start is invoked more than once",
+	);
+	assert.equal(
+		t.readState().lastSwitches[0]?.reason,
+		"startup preflight: selected account unavailable",
+		"suppressing the notice must preserve switch persistence and logging data",
+	);
+
+	const switches = t.rec.setModels.length;
+	await t.fire("before_agent_start", {});
+	assert.equal(t.rec.setModels.length, switches, "the ready startup target must remain selected");
+	assert.equal(
+		t.rec.notifies.filter((message) =>
+			message.includes("startup preflight: selected account unavailable"),
+		).length,
+		0,
+	);
+
+	await finishError(
+		t,
+		"openai-codex-account-2",
+		t.ctx.model.id,
+		"429 rate_limit_error",
+	);
+	assert.ok(
+		t.rec.notifies.some(
+			(message) =>
+				message.includes("Provider failover [v") &&
+				message.includes("429 rate_limit_error"),
+		),
+		"non-startup failover warnings must remain visible",
+	);
 });
 
 test("startup preflight restores lastUserModel instead of failing over Pi's accidental kimi fallback", async () => {
@@ -4462,7 +4625,8 @@ test("transient escalation still resumes on the fallback when Pi has no native r
 		2,
 		"if Pi does not retry natively, the fallback wake must continue the interrupted task",
 	);
-	assert.match(String(t.rec.sent[1].prompt), /kimi-coding-account-2\/k3/);
+	assert.match(String(t.rec.sent[1].prompt), /retrying k3/);
+	assert.doesNotMatch(String(t.rec.sent[1].prompt), /kimi-coding-account-2/);
 });
 
 test("hyphenated Invalid API-key immediately invalidates Alibaba and fails over", async () => {
@@ -5042,6 +5206,21 @@ test("startup capability preflight: a host missing pi.continueAgent is flagged O
 			/IMPOSSIBLE|cannot auto-continue|does not expose pi\.setModel/i.test(n),
 		),
 		"switching and the injection fallback both work, so no error/warning is raised",
+	);
+});
+
+test("startup capability preflight: showStartupNotice false suppresses the expected fallback info", async () => {
+	const t = setup({
+		config: { showStartupNotice: false },
+		current: { provider: "anthropic", id: "claude-opus-4-8" },
+		omitContinueAgent: true,
+	});
+	await t.fire("session_start");
+	assert.ok(
+		!t.rec.notifies.some((n) =>
+			/seamless in-place resume .*not available/i.test(n),
+		),
+		"quiet startup suppresses the harmless capability fallback notice",
 	);
 });
 

@@ -552,6 +552,7 @@ type ProviderFailoverConfig = {
 	probeCooldownMs?: number;
 	invalidCooldownMs?: number;
 	transientCooldownMs?: number;
+	showStartupNotice?: boolean;
 	showUsage?: boolean;
 	usageRefreshMs?: number;
 	usageStatusRefreshMs?: number;
@@ -647,6 +648,7 @@ type RuntimeConfig = Required<
 		| "probeCooldownMs"
 		| "invalidCooldownMs"
 		| "transientCooldownMs"
+		| "showStartupNotice"
 		| "showUsage"
 		| "usageRefreshMs"
 		| "usageStatusRefreshMs"
@@ -1722,6 +1724,7 @@ const DEFAULT_CONFIG: ProviderFailoverConfig = {
 	probeCooldownMs: DEFAULT_PROBE_COOLDOWN_MS,
 	invalidCooldownMs: DEFAULT_INVALID_COOLDOWN_MS,
 	transientCooldownMs: DEFAULT_TRANSIENT_COOLDOWN_MS,
+	showStartupNotice: true,
 	showUsage: true,
 	usageRefreshMs: DEFAULT_USAGE_REFRESH_MS,
 	usageStatusRefreshMs: DEFAULT_USAGE_STATUS_REFRESH_MS,
@@ -1898,6 +1901,7 @@ function normalizeConfig(raw: ProviderFailoverConfig): RuntimeConfig {
 			raw.transientCooldownMs,
 			DEFAULT_TRANSIENT_COOLDOWN_MS,
 		),
+		showStartupNotice: raw.showStartupNotice ?? true,
 		showUsage: raw.showUsage ?? true,
 		usageRefreshMs: positiveOr(raw.usageRefreshMs, DEFAULT_USAGE_REFRESH_MS),
 		usageStatusRefreshMs: positiveOr(
@@ -2577,6 +2581,16 @@ function ref(provider: string, modelId: string): ModelRef {
 	return `${provider}/${modelId}` as ModelRef;
 }
 
+/** Render model identity without exposing the internal account slot used for routing. */
+export function displayModelRef(provider: string, modelId: string): string {
+	return modelId;
+}
+
+function displayRef(modelRef: string): string {
+	const slash = modelRef.indexOf("/");
+	return slash === -1 ? modelRef : modelRef.slice(slash + 1);
+}
+
 function parseTarget(
 	target: unknown,
 ): { provider: string; modelId?: string } | undefined {
@@ -2857,6 +2871,7 @@ function registerAnthropicSlot(
 		streamSimple: anthropicPayloadStream,
 		oauth: {
 			name: `Claude Pro/Max (${id})`,
+			isSubscription: true,
 			async login(callbacks: any) {
 				return rejectDuplicateLogin(
 					id,
@@ -2874,6 +2889,7 @@ function codexOAuthOverride(providerId: string, name: string) {
 	const getProvider = () => requirePiAiOauth().codex;
 	return {
 		name,
+		isSubscription: true,
 		// Read-only flag: Pi reads it while merely LISTING providers, long before any
 		// login. It must never throw — an unresolvable pi-ai here is what used to blow
 		// up the whole extension load. `true` mirrors pi-ai's own Codex provider, and an
@@ -6085,6 +6101,33 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 		}
 	}
 
+	/** Register the next Anthropic OAuth slot before Pi snapshots /login providers. */
+	function registerInitialAnthropicSlots(auth: Record<string, AuthEntry>): void {
+		const occupied = new Set(
+			Object.keys(auth)
+				.filter(
+					(id) =>
+						classifyProvider(id, config.qwenProvider) === "anthropic" &&
+						isEntryUsable(auth[id]),
+				)
+				.map(slotIndex),
+		);
+		let spare = 2;
+		while (occupied.has(spare) && spare <= config.maxAccountsPerProvider) spare++;
+		if (spare <= config.maxAccountsPerProvider) occupied.add(spare);
+		for (const index of occupied) {
+			if (index <= 1) continue;
+			const id = slotId("anthropic", index, config.qwenProvider);
+			registerAnthropicSlot(
+				pi,
+				id,
+				DEFAULT_ANTHROPIC_MODELS,
+				numberedSlotBaseUrl(id, "anthropic"),
+			);
+			registeredSlots.add(id);
+		}
+	}
+
 	/** Register authed alias slots plus one spare per family for the next interactive /login. */
 	function syncRegisteredSlots(auth: Record<string, AuthEntry>, ctx?: any) {
 		// Cursor is the one family whose provider lives in a separate, optional repo. Unlike
@@ -6746,8 +6789,8 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 		// picking up accounts that freed up, which is the opposite of what it does.
 		ctx.ui.notify(
 			spent
-				? `pi-multi-account: switched to ${model.provider}/${model.id} — its quota forecast still says spent (~${formatUntil(until)}), but a forecast is not a verdict: it is tried right now, and re-checked at least every ${formatDelay(config.maxRecheckIntervalMs)} regardless`
-				: `pi-multi-account: switched to ${model.provider}/${model.id}`,
+				? `pi-multi-account: switched to ${displayModelRef(model.provider, model.id)} — its quota forecast still says spent (~${formatUntil(until)}), but a forecast is not a verdict: it is tried right now, and re-checked at least every ${formatDelay(config.maxRecheckIntervalMs)} regardless`
+				: `pi-multi-account: switched to ${displayModelRef(model.provider, model.id)}`,
 			"info",
 		);
 	}
@@ -6817,7 +6860,7 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 			if (stale()) return false;
 			if (!ok) {
 				ctx.ui.notify(
-					`Provider failover: ${to} could not be activated; skipping it briefly`,
+					`Provider failover: ${displayRef(to)} could not be activated; skipping it briefly`,
 					"warning",
 				);
 				// A setModel failure is not a quota/rate-limit and must not receive the normal
@@ -6849,10 +6892,16 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 					20,
 				),
 			});
-			ctx.ui.notify(
-				`Provider failover [v${VERSION}]: ${from} → ${to} (${reason})`,
-				"warning",
-			);
+			// Startup readiness is maintenance, not a failed user turn. Keep the switch,
+			// state entry, and event log, but suppress its UI so repeated session_start
+			// events cannot duplicate the warning.
+			const startupPreflight = reason.startsWith("startup preflight:");
+			if (!startupPreflight) {
+				ctx.ui.notify(
+					`Provider failover [v${VERSION}]: ${displayRef(from)} → ${displayRef(to)} (${reason})`,
+					"warning",
+				);
+			}
 			return true;
 		}
 		return false;
@@ -7689,10 +7738,10 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 				: "the active account");
 		const sameModelRetry = source?.from === to;
 		const prompt = sameModelRetry
-			? `Provider retry activated: retrying ${to} after a temporary failure; no account or model switch occurred. Continue the interrupted task from where it stopped. The interrupted turn is preserved verbatim in this session as a [handoff:interrupted-turn] record — read it before acting and do not restart the task from the beginning.`
+			? `Provider retry activated: retrying ${displayRef(to)} after a temporary failure; no account or model switch occurred. Continue the interrupted task from where it stopped. The interrupted turn is preserved verbatim in this session as a [handoff:interrupted-turn] record — read it before acting and do not restart the task from the beginning.`
 			: config.continuationPrompt
-					.replaceAll("{from}", String(source?.from ?? "the previous account"))
-					.replaceAll("{to}", String(to))
+					.replaceAll("{from}", source?.from ? displayRef(source.from) : "the previous account")
+					.replaceAll("{to}", displayRef(to))
 					.replaceAll("{reason}", source?.reason ?? "provider failover");
 		try {
 			expectingInjectedContinuation = true;
@@ -9412,7 +9461,7 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 
 		refreshDiscovery(false, ctx);
 		const current = ctx.model
-			? `${ctx.model.provider}/${ctx.model.id}`
+			? displayModelRef(ctx.model.provider, ctx.model.id)
 			: "none";
 		// What the rotation looks like to anything that does NOT load this extension: a memory
 		// extension consolidating its notes, an external CLI, any `pi -p --no-extensions` child.
@@ -10163,6 +10212,9 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 		return !slotProxyForeignOwner && slotProxyPort === SLOT_PROXY_PORT;
 	}
 
+	// Pi snapshots /login providers before lifecycle discovery runs. Register occupied Anthropic
+	// aliases and the next free OAuth slot synchronously, without touching their credentials.
+	registerInitialAnthropicSlots(readAuthFile());
 	refreshDiscovery(true);
 
 	// Runtime capability preflight. The RECURRING class of breakage in this extension is the
@@ -10556,7 +10608,7 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 					`pi-multi-account v${VERSION}: this Pi build exposes neither pi.continueAgent() nor pi.sendUserMessage() — after a switch the task cannot auto-continue; you will have to re-send your prompt on the new account.`,
 					"warning",
 				);
-			} else if (!seamlessResume) {
+			} else if (!seamlessResume && config.showStartupNotice) {
 				ctx.ui?.notify?.(
 					`pi-multi-account v${VERSION}: seamless in-place resume (pi.continueAgent) is not available on this Pi build — failover WILL still switch accounts and auto-continue by re-injecting your task as a fresh turn. This is the expected fallback, not an error.`,
 					"info",
@@ -10633,12 +10685,14 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 			mode: subagentChild ? "subagent-child-passive" : "interactive",
 			rotation: rotation.length,
 		});
-		ctx.ui.notify(
-			subagentChild
-				? `pi-multi-account v${VERSION} loaded in passive pi-subagents child mode. Model routing remains owned by the parent runner.`
-				: `pi-multi-account v${VERSION} loaded (${config.enabled ? "enabled" : "disabled"}). ${rotation.length} account(s) in rotation. Config: ${CONFIG_PATH}`,
-			"info",
-		);
+		if (config.showStartupNotice) {
+			ctx.ui.notify(
+				subagentChild
+					? `pi-multi-account v${VERSION} loaded in passive pi-subagents child mode. Model routing remains owned by the parent runner.`
+					: `pi-multi-account v${VERSION} loaded (${config.enabled ? "enabled" : "disabled"}). ${rotation.length} account(s) in rotation. Config: ${CONFIG_PATH}`,
+				"info",
+			);
+		}
 		if (duplicateSlots.length > 0) {
 			ctx.ui.notify(
 				`pi-multi-account: duplicate account slot(s) skipped: ${duplicateSlots.map(({ duplicate, primary }) => `${duplicate} duplicates ${primary}`).join(", ")}. Log the duplicate slot into a different account.`,
