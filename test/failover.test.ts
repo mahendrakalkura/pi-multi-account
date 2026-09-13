@@ -3023,6 +3023,36 @@ test("Ollama alias slots (ollama-account-2) join the rotation", async () => {
 	);
 });
 
+test("showStartupNotice false suppresses only the startup notice", async () => {
+	const t = setup({
+		accounts: {
+			"openai-codex": {
+				type: "oauth",
+				access: codexAccessToken("shared-workspace", "membership-a", "base"),
+				refresh: "base-r",
+				accountId: "shared-workspace",
+			},
+			"openai-codex-account-2": {
+				type: "oauth",
+				access: codexAccessToken("shared-workspace", "membership-a", "refreshed"),
+				refresh: "duplicate-r",
+				accountId: "shared-workspace",
+			},
+		},
+		config: { showStartupNotice: false },
+		current: { provider: "openai-codex", id: "gpt-5.5" },
+	});
+	await t.fire("session_start", { reason: "startup" });
+	assert.equal(
+		t.rec.notifies.some((message) => message.includes("account(s) in rotation")),
+		false,
+	);
+	assert.equal(
+		t.rec.notifies.some((message) => message.includes("duplicate account slot(s) skipped")),
+		true,
+	);
+});
+
 test("Alibaba/Qwen alias slots (alibaba-account-2) join the rotation", async () => {
 	const accounts = {
 		alibaba: { type: "api_key", key: "k1" },
@@ -5042,6 +5072,21 @@ test("startup capability preflight: a host missing pi.continueAgent is flagged O
 			/IMPOSSIBLE|cannot auto-continue|does not expose pi\.setModel/i.test(n),
 		),
 		"switching and the injection fallback both work, so no error/warning is raised",
+	);
+});
+
+test("startup capability preflight: showStartupNotice false suppresses the expected fallback info", async () => {
+	const t = setup({
+		config: { showStartupNotice: false },
+		current: { provider: "anthropic", id: "claude-opus-4-8" },
+		omitContinueAgent: true,
+	});
+	await t.fire("session_start");
+	assert.ok(
+		!t.rec.notifies.some((n) =>
+			/seamless in-place resume .*not available/i.test(n),
+		),
+		"quiet startup suppresses the harmless capability fallback notice",
 	);
 });
 

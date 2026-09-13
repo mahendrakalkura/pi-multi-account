@@ -552,6 +552,7 @@ type ProviderFailoverConfig = {
 	probeCooldownMs?: number;
 	invalidCooldownMs?: number;
 	transientCooldownMs?: number;
+	showStartupNotice?: boolean;
 	showUsage?: boolean;
 	usageRefreshMs?: number;
 	usageStatusRefreshMs?: number;
@@ -647,6 +648,7 @@ type RuntimeConfig = Required<
 		| "probeCooldownMs"
 		| "invalidCooldownMs"
 		| "transientCooldownMs"
+		| "showStartupNotice"
 		| "showUsage"
 		| "usageRefreshMs"
 		| "usageStatusRefreshMs"
@@ -1722,6 +1724,7 @@ const DEFAULT_CONFIG: ProviderFailoverConfig = {
 	probeCooldownMs: DEFAULT_PROBE_COOLDOWN_MS,
 	invalidCooldownMs: DEFAULT_INVALID_COOLDOWN_MS,
 	transientCooldownMs: DEFAULT_TRANSIENT_COOLDOWN_MS,
+	showStartupNotice: true,
 	showUsage: true,
 	usageRefreshMs: DEFAULT_USAGE_REFRESH_MS,
 	usageStatusRefreshMs: DEFAULT_USAGE_STATUS_REFRESH_MS,
@@ -1898,6 +1901,7 @@ function normalizeConfig(raw: ProviderFailoverConfig): RuntimeConfig {
 			raw.transientCooldownMs,
 			DEFAULT_TRANSIENT_COOLDOWN_MS,
 		),
+		showStartupNotice: raw.showStartupNotice ?? true,
 		showUsage: raw.showUsage ?? true,
 		usageRefreshMs: positiveOr(raw.usageRefreshMs, DEFAULT_USAGE_REFRESH_MS),
 		usageStatusRefreshMs: positiveOr(
@@ -10556,7 +10560,7 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 					`pi-multi-account v${VERSION}: this Pi build exposes neither pi.continueAgent() nor pi.sendUserMessage() — after a switch the task cannot auto-continue; you will have to re-send your prompt on the new account.`,
 					"warning",
 				);
-			} else if (!seamlessResume) {
+			} else if (!seamlessResume && config.showStartupNotice) {
 				ctx.ui?.notify?.(
 					`pi-multi-account v${VERSION}: seamless in-place resume (pi.continueAgent) is not available on this Pi build — failover WILL still switch accounts and auto-continue by re-injecting your task as a fresh turn. This is the expected fallback, not an error.`,
 					"info",
@@ -10633,12 +10637,14 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 			mode: subagentChild ? "subagent-child-passive" : "interactive",
 			rotation: rotation.length,
 		});
-		ctx.ui.notify(
-			subagentChild
-				? `pi-multi-account v${VERSION} loaded in passive pi-subagents child mode. Model routing remains owned by the parent runner.`
-				: `pi-multi-account v${VERSION} loaded (${config.enabled ? "enabled" : "disabled"}). ${rotation.length} account(s) in rotation. Config: ${CONFIG_PATH}`,
-			"info",
-		);
+		if (config.showStartupNotice) {
+			ctx.ui.notify(
+				subagentChild
+					? `pi-multi-account v${VERSION} loaded in passive pi-subagents child mode. Model routing remains owned by the parent runner.`
+					: `pi-multi-account v${VERSION} loaded (${config.enabled ? "enabled" : "disabled"}). ${rotation.length} account(s) in rotation. Config: ${CONFIG_PATH}`,
+				"info",
+			);
+		}
 		if (duplicateSlots.length > 0) {
 			ctx.ui.notify(
 				`pi-multi-account: duplicate account slot(s) skipped: ${duplicateSlots.map(({ duplicate, primary }) => `${duplicate} duplicates ${primary}`).join(", ")}. Log the duplicate slot into a different account.`,
