@@ -3117,6 +3117,40 @@ test("Kimi alias slots (kimi-coding-account-2) join the rotation", async () => {
 	);
 });
 
+test("initialization registers the next free Anthropic OAuth slot before /login snapshots providers", () => {
+	const t = setup({
+		accounts: {
+			anthropic: { type: "oauth", access: "a1", refresh: "ar1" },
+			"anthropic-account-2": { type: "oauth", access: "a2", refresh: "ar2" },
+			"anthropic-account-3": { type: "oauth", access: "a3", refresh: "ar3" },
+		},
+		current: { provider: "anthropic", id: "claude-opus-4-8" },
+	});
+
+	assert.deepEqual(
+		t.rec.registrations
+			.map(({ provider }) => provider)
+			.filter((provider) => provider.startsWith("anthropic-account-")),
+		["anthropic-account-2", "anthropic-account-3", "anthropic-account-4"],
+		"all occupied aliases and the next free slot must exist when initialization returns",
+	);
+	for (const provider of ["anthropic-account-2", "anthropic-account-3"]) {
+		const slot = t.providerConfigs.get(provider);
+		assert.equal(slot.oauth.isSubscription, true);
+		assert.equal(typeof slot.oauth.login, "function");
+		assert.equal(
+			slot.oauth.getApiKey({ type: "oauth", access: `${provider}-access`, refresh: "r" }),
+			`${provider}-access`,
+			`${provider} must retain its slot-bound credential behavior`,
+		);
+	}
+	const spare = t.providerConfigs.get("anthropic-account-4");
+	assert.equal(spare.oauth.isSubscription, true);
+	assert.equal(typeof spare.oauth.login, "function");
+
+	return t.fire("session_shutdown", { reason: "test" });
+});
+
 test("a Kimi subscription slot is registered so /login can offer it", async () => {
 	// The whole point of `add kimi`: the NEXT free slot must exist as a real provider
 	// before the user runs /login, or the picker has nothing to select.

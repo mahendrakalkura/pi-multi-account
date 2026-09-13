@@ -6091,6 +6091,33 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 		}
 	}
 
+	/** Register the next Anthropic OAuth slot before Pi snapshots /login providers. */
+	function registerInitialAnthropicSlots(auth: Record<string, AuthEntry>): void {
+		const occupied = new Set(
+			Object.keys(auth)
+				.filter(
+					(id) =>
+						classifyProvider(id, config.qwenProvider) === "anthropic" &&
+						isEntryUsable(auth[id]),
+				)
+				.map(slotIndex),
+		);
+		let spare = 2;
+		while (occupied.has(spare) && spare <= config.maxAccountsPerProvider) spare++;
+		if (spare <= config.maxAccountsPerProvider) occupied.add(spare);
+		for (const index of occupied) {
+			if (index <= 1) continue;
+			const id = slotId("anthropic", index, config.qwenProvider);
+			registerAnthropicSlot(
+				pi,
+				id,
+				DEFAULT_ANTHROPIC_MODELS,
+				numberedSlotBaseUrl(id, "anthropic"),
+			);
+			registeredSlots.add(id);
+		}
+	}
+
 	/** Register authed alias slots plus one spare per family for the next interactive /login. */
 	function syncRegisteredSlots(auth: Record<string, AuthEntry>, ctx?: any) {
 		// Cursor is the one family whose provider lives in a separate, optional repo. Unlike
@@ -10169,6 +10196,9 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 		return !slotProxyForeignOwner && slotProxyPort === SLOT_PROXY_PORT;
 	}
 
+	// Pi snapshots /login providers before lifecycle discovery runs. Register occupied Anthropic
+	// aliases and the next free OAuth slot synchronously, without touching their credentials.
+	registerInitialAnthropicSlots(readAuthFile());
 	refreshDiscovery(true);
 
 	// Runtime capability preflight. The RECURRING class of breakage in this extension is the
