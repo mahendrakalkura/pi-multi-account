@@ -3829,6 +3829,78 @@ test("session_start restores settings.json default when lastUserModel is missing
 	uninstallCursorProvider();
 });
 
+test("startup preflight switches silently and does not repeat on before_agent_start", async () => {
+	const now = Date.now();
+	const t = setup({
+		accounts: {
+			"openai-codex": {
+				type: "oauth",
+				access: "c1",
+				refresh: "cr1",
+				accountId: "codex-1",
+			},
+			"openai-codex-account-2": {
+				type: "oauth",
+				access: "c2",
+				refresh: "cr2",
+				accountId: "codex-2",
+			},
+			anthropic: { type: "oauth", access: "a", refresh: "ar" },
+		},
+		current: { provider: "openai-codex", id: "gpt-5.6-sol" },
+		seedState: {
+			stateVersion: 5,
+			exhaustedUntilByProvider: {
+				"openai-codex": now + 60 * 60 * 1000,
+			},
+			exhaustedUntilByModel: {},
+			lastProbeAtByProvider: {},
+			invalidatedByProvider: {},
+			lastSwitches: [],
+		},
+	});
+
+	await t.fire("session_start", { reason: "startup" });
+	assert.equal(t.ctx.model?.provider, "openai-codex-account-2");
+	assert.equal(
+		t.rec.notifies.filter((message) =>
+			message.includes("startup preflight: selected account unavailable"),
+		).length,
+		0,
+		"startup maintenance must not warn, even when session_start is invoked more than once",
+	);
+	assert.equal(
+		t.readState().lastSwitches[0]?.reason,
+		"startup preflight: selected account unavailable",
+		"suppressing the notice must preserve switch persistence and logging data",
+	);
+
+	const switches = t.rec.setModels.length;
+	await t.fire("before_agent_start", {});
+	assert.equal(t.rec.setModels.length, switches, "the ready startup target must remain selected");
+	assert.equal(
+		t.rec.notifies.filter((message) =>
+			message.includes("startup preflight: selected account unavailable"),
+		).length,
+		0,
+	);
+
+	await finishError(
+		t,
+		"openai-codex-account-2",
+		t.ctx.model.id,
+		"429 rate_limit_error",
+	);
+	assert.ok(
+		t.rec.notifies.some(
+			(message) =>
+				message.includes("Provider failover [v") &&
+				message.includes("429 rate_limit_error"),
+		),
+		"non-startup failover warnings must remain visible",
+	);
+});
+
 test("startup preflight restores lastUserModel instead of failing over Pi's accidental kimi fallback", async () => {
 	installCursorProvider();
 	const t = setup({

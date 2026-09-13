@@ -6882,10 +6882,16 @@ export default function piMultiAccount(pi: ExtensionAPI) {
 					20,
 				),
 			});
-			ctx.ui.notify(
-				`Provider failover [v${VERSION}]: ${from} → ${to} (${reason})`,
-				"warning",
-			);
+			// Startup readiness is maintenance, not a failed user turn. Keep the switch,
+			// state entry, and event log, but suppress its UI so repeated session_start
+			// events cannot duplicate the warning.
+			const startupPreflight = reason.startsWith("startup preflight:");
+			if (!startupPreflight) {
+				ctx.ui.notify(
+					`Provider failover [v${VERSION}]: ${from} → ${to} (${reason})`,
+					"warning",
+				);
+			}
 			return true;
 		}
 		return false;
