@@ -93,6 +93,7 @@ const {
 	default: piMultiAccount,
 	explicitCliSelections,
 	canPersistRefreshedCredentials,
+	displayModelRef,
 	mergeRefreshedCredentials,
 	modelIdentityKey,
 	modelQualityBand,
@@ -108,6 +109,7 @@ const {
 		authStorage: any,
 		authWritable?: () => boolean,
 	) => boolean;
+	displayModelRef: (provider: string, modelId: string) => string;
 	mergeRefreshedCredentials: (credentials: any, refreshed: any) => any;
 	modelIdentityKey: (modelId: string) => string;
 	modelQualityBand: (modelId: string, provider?: string) => "apex" | "frontier" | "balanced" | "fast" | undefined;
@@ -175,6 +177,11 @@ test("explicit CLI selection detection follows Pi option parsing", () => {
 	);
 });
 
+test("display model identity hides the internal account-routing provider", () => {
+	assert.equal(displayModelRef("openai-codex-account-2", "gpt-5.6-sol"), "gpt-5.6-sol");
+	assert.equal(displayModelRef("anthropic", "claude-opus-5"), "claude-opus-5");
+});
+
 test("model identity folds Cursor effort suffixes and the cursor- prefix", () => {
 	assert.equal(modelIdentityKey("cursor-grok-4.6-high"), "grok-4.6");
 	assert.equal(modelIdentityKey("cursor-grok-4.6"), "grok-4.6");
@@ -185,6 +192,26 @@ test("model identity folds Cursor effort suffixes and the cursor- prefix", () =>
 	assert.ok(!sameModelIdentity("cursor-grok-4.6", "claude-4-sonnet"));
 	assert.ok(!sameModelIdentity("gpt-5.4", "gpt-5.4-mini"));
 	assert.ok(!sameModelIdentity("k3", "k3-256k"));
+});
+
+test("failover notifications and status hide account aliases from model identity", async () => {
+	const t = setup({
+		accounts: {
+			anthropic: { type: "oauth", access: "a", refresh: "ar" },
+			"openai-codex-account-2": { type: "oauth", access: "c", refresh: "cr" },
+		},
+		current: { provider: "anthropic", id: "claude-opus-4-8" },
+	});
+	await finishError(t, "anthropic", "claude-opus-4-8", "429 rate limit");
+	const failover = t.rec.notifies.find((message) => message.includes("Provider failover [v")) ?? "";
+	assert.match(failover, /claude-opus-4-8.*gpt-5\.5/);
+	assert.doesNotMatch(failover, /openai-codex-account-2/);
+
+	t.rec.notifies.length = 0;
+	await t.command("status");
+	const status = t.rec.notifies.at(-1) ?? "";
+	assert.match(status, /Current: gpt-5\.5/);
+	assert.doesNotMatch(status, /Current: openai-codex-account-2\//);
 });
 
 test("cross-provider quality bands quarantine Astra/Fable above ordinary frontier", () => {
@@ -4492,7 +4519,8 @@ test("transient escalation still resumes on the fallback when Pi has no native r
 		2,
 		"if Pi does not retry natively, the fallback wake must continue the interrupted task",
 	);
-	assert.match(String(t.rec.sent[1].prompt), /kimi-coding-account-2\/k3/);
+	assert.match(String(t.rec.sent[1].prompt), /retrying k3/);
+	assert.doesNotMatch(String(t.rec.sent[1].prompt), /kimi-coding-account-2/);
 });
 
 test("hyphenated Invalid API-key immediately invalidates Alibaba and fails over", async () => {

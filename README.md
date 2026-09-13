@@ -17,6 +17,7 @@ When the account you are using hits a quota or rate limit, `pi-multi-account` tr
 - **Deduplicates provably identical accounts** so duplicate Codex workspace memberships and identical credentials do not consume multiple rotation slots or get separate cooldowns. Different users in one Team/Business workspace remain distinct. New provable duplicate logins are rejected before the redundant slot is saved.
 - **Keeps YOUR reasoning level across switches.** Whatever the session runs at — your Pi default, `/thinking`, or a per-agent `--thinking low` — is preserved and restored after every account/model switch, so it never drifts downward when a weaker fallback model clamps it. The extension does not override your level (set `reasoningLevel` if you *want* a forced one), and extreme levels such as `xhigh` / Max / Ultra are never forced.
 - **Shows live limits for the active account** in Pi's footer: remaining 5-hour/session and weekly allowance plus reset countdowns for Codex, Anthropic, and Ollama Cloud accounts.
+- **Keeps account slots out of model identity.** Failover notifications, continuation prompts, and the status `Current` line show the account-agnostic model id (for example, `gpt-5.6-sol`) while internal provider ids such as `openai-codex-account-2` continue to select credentials and routes. Account-management diagnostics still name slots when the distinction is operationally necessary.
 
 ## Install
 
@@ -76,7 +77,7 @@ Example status output:
 
 ```text
 pi-multi-account: enabled · auto-discover ON
-Current: anthropic/claude-opus-4-8
+Current: claude-opus-4-8
 Current limits: Claude | 5h 0% left/2h14m | 7d 92% left/1d18h
 Rotation (3): anthropic → openai-codex → openai-codex-account-2
 Registered login slots: anthropic-account-2, openai-codex-account-2
