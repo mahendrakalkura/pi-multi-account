@@ -2861,6 +2861,7 @@ function registerAnthropicSlot(
 		streamSimple: anthropicPayloadStream,
 		oauth: {
 			name: `Claude Pro/Max (${id})`,
+			isSubscription: true,
 			async login(callbacks: any) {
 				return rejectDuplicateLogin(
 					id,
@@ -2878,6 +2879,7 @@ function codexOAuthOverride(providerId: string, name: string) {
 	const getProvider = () => requirePiAiOauth().codex;
 	return {
 		name,
+		isSubscription: true,
 		// Read-only flag: Pi reads it while merely LISTING providers, long before any
 		// login. It must never throw — an unresolvable pi-ai here is what used to blow
 		// up the whole extension load. `true` mirrors pi-ai's own Codex provider, and an
